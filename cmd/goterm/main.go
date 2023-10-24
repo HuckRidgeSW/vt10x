@@ -6,8 +6,8 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/ActiveState/vt10x"
 	"github.com/gdamore/tcell"
-	"github.com/hinshun/vt10x"
 	"github.com/kr/pty"
 )
 
