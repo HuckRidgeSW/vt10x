@@ -1,4 +1,5 @@
-// +build !windows
+//go:build !windows && not_used
+// +build !windows,not_used
 
 package vt10x
 
