@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"unicode/utf8"
 
 	"github.com/ActiveState/vt10x"
 	"github.com/gdamore/tcell"
@@ -72,10 +72,6 @@ func goterm() error {
 		}
 	}()
 
-	go func() {
-		io.Copy(ptm, os.Stdin)
-	}()
-
 	eventc := make(chan tcell.Event, 4)
 	go func() {
 		for {
@@ -92,6 +88,12 @@ func goterm() error {
 				vt10x.ResizePty(ptm, width, height)
 				term.Resize(width, height)
 				s.Sync()
+			case *tcell.EventKey:
+				var buf [4]byte
+				n := utf8.EncodeRune(buf[:], ev.Rune())
+				if n > 0 {
+					ptm.Write(buf[:n])
+				}
 			}
 		case <-endc:
 			return nil
