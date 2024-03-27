@@ -335,13 +335,13 @@ func (t *State) resize(cols, rows int) bool {
 		copy(t.altLines[i], altLines[i])
 	}
 	copy(t.tabs, tabs)
-	if cols > t.cols {
+	if cols >= t.cols {
 		i := t.cols - 1
-		for i > 0 && !tabs[i] {
+		for i > 0 && !t.tabs[i] {
 			i--
 		}
-		for i += tabspaces; i < len(tabs); i += tabspaces {
-			tabs[i] = true
+		for i += tabspaces; i < len(t.tabs); i += tabspaces {
+			t.tabs[i] = true
 		}
 	}
 
