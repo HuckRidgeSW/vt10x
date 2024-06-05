@@ -108,7 +108,7 @@ func update(s tcell.Screen, state *vt10x.State, w, h int) {
 	defer state.Unlock()
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			c, fg, bg := state.Cell(x, y)
+			c, fg, bg, _ := state.Cell(x, y)
 
 			style := tcell.StyleDefault
 			if fg != vt10x.DefaultFG {

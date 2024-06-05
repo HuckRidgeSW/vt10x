@@ -1,5 +1,7 @@
 package vt10x
 
+import "time"
+
 func isControlCode(c rune) bool {
 	return c < 0x20 || c == 0177
 }
@@ -15,7 +17,8 @@ func (t *State) parse(c rune) bool {
 	// TODO: update selection; see st.c:2450
 
 	if t.mode&ModeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
-		t.lines[t.cur.y][t.cur.x].mode |= attrWrap
+		t.lines[t.cur.y].g[t.cur.x].mode |= attrWrap
+		t.lines[t.cur.y].t = time.Now()
 		t.newline(true)
 	}
 

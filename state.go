@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 )
 
 const (
@@ -68,7 +69,10 @@ type glyph struct {
 	fg, bg Color
 }
 
-type line []glyph
+type line struct {
+	t time.Time
+	g []glyph
+}
 
 type cursor struct {
 	attr  glyph
@@ -85,24 +89,25 @@ type State struct {
 	// RecordHistory is a flag that when set to true keeps a history of all lines that are scrolled out of view
 	RecordHistory bool
 
-	w             io.Writer
-	mu            sync.Mutex
-	changed       ChangeFlag
-	cols, rows    int
-	lines         []line
-	altLines      []line
-	dirty         []bool // line dirtiness
-	anydirty      bool
-	cur, curSaved cursor
-	top, bottom   int // scroll limits
-	mode          ModeFlag
-	state         parseState
-	str           strEscape
-	csi           csiEscape
-	numlock       bool
-	tabs          []bool
-	title         string
-	history       []line
+	w                     io.Writer
+	mu                    sync.Mutex
+	changed               ChangeFlag
+	cols, rows            int
+	lines                 []line
+	altLines              []line
+	dirty                 []bool // line dirtiness
+	anydirty              bool
+	cur, curSaved         cursor
+	top, bottom           int // scroll limits
+	mode                  ModeFlag
+	state                 parseState
+	str                   strEscape
+	csi                   csiEscape
+	numlock               bool
+	tabs                  []bool
+	title                 string
+	history               []line
+	lastLine, altLastLine *int // Last line where a non-space has ever been written
 }
 
 func (t *State) logf(format string, args ...interface{}) {
@@ -138,8 +143,10 @@ func (t *State) Unlock() {
 
 // Cell returns the character code, foreground color, and background
 // color at position (x, y) relative to the top left of the terminal.
-func (t *State) Cell(x, y int) (ch rune, fg Color, bg Color) {
-	return t.lines[y][x].c, Color(t.lines[y][x].fg), Color(t.lines[y][x].bg)
+func (t *State) Cell(x, y int) (ch rune, fg Color, bg Color, lt time.Time) {
+	l := t.lines[y]
+	g := l.g[x]
+	return g.c, Color(g.fg), Color(g.bg), l.t
 }
 
 // Cursor returns the current position of the cursor.
@@ -266,15 +273,24 @@ func (t *State) setChar(c rune, attr *glyph, x, y int) {
 	}
 	t.changed |= ChangedScreen
 	t.dirty[y] = true
-	t.lines[y][x] = *attr
-	t.lines[y][x].c = c
+	l := &t.lines[y]
+	g := &l.g[x]
+	orig := *g
+	*g = *attr
+	g.c = c
+	if y > t.getLastLine() && c != ' ' {
+		t.setLastLine(y)
+	}
 	//if t.options.BrightBold && attr.mode&attrBold != 0 && attr.fg < 8 {
 	if attr.mode&attrBold != 0 && attr.fg < 8 {
-		t.lines[y][x].fg = attr.fg + 8
+		g.fg = attr.fg + 8
 	}
 	if attr.mode&attrReverse != 0 {
-		t.lines[y][x].fg = attr.bg
-		t.lines[y][x].bg = attr.fg
+		g.fg = attr.bg
+		g.bg = attr.fg
+	}
+	if *g != orig {
+		l.t = time.Now()
 	}
 }
 
@@ -315,6 +331,7 @@ func (t *State) resize(cols, rows int) bool {
 		copy(t.lines, t.lines[slide:slide+rows])
 		copy(t.altLines, t.altLines[slide:slide+rows])
 	}
+	t.setLastLine(min(t.getLastLine(), rows-1))
 
 	lines, altLines, tabs := t.lines, t.altLines, t.tabs
 	t.lines = make([]line, rows)
@@ -325,14 +342,17 @@ func (t *State) resize(cols, rows int) bool {
 	minrows := min(rows, t.rows)
 	mincols := min(cols, t.cols)
 	t.changed |= ChangedScreen
+	now := time.Now()
 	for i := 0; i < rows; i++ {
 		t.dirty[i] = true
-		t.lines[i] = make(line, cols)
-		t.altLines[i] = make(line, cols)
+		t.lines[i] = line{t: now, g: make([]glyph, cols)}
+		t.altLines[i] = line{t: now, g: make([]glyph, cols)}
 	}
 	for i := 0; i < minrows; i++ {
-		copy(t.lines[i], lines[i])
-		copy(t.altLines[i], altLines[i])
+		copy(t.lines[i].g, lines[i].g)
+		copy(t.altLines[i].g, altLines[i].g)
+		t.lines[i].t = lines[i].t
+		t.altLines[i].t = altLines[i].t
 	}
 	copy(t.tabs, tabs)
 	if cols >= t.cols {
@@ -356,7 +376,7 @@ func (t *State) resize(cols, rows int) bool {
 		if cols > 0 && minrows < rows {
 			t.clear(0, minrows, cols-1, rows-1)
 		}
-		t.swapScreen()
+		t.swapScreen(false)
 	}
 	return slide > 0
 }
@@ -373,11 +393,14 @@ func (t *State) clear(x0, y0, x1, y1 int) {
 	y0 = clamp(y0, 0, t.rows-1)
 	y1 = clamp(y1, 0, t.rows-1)
 	t.changed |= ChangedScreen
+	now := time.Now()
 	for y := y0; y <= y1; y++ {
 		t.dirty[y] = true
+		l := &t.lines[y]
+		l.t = now
 		for x := x0; x <= x1; x++ {
-			t.lines[y][x] = t.cur.attr
-			t.lines[y][x].c = ' '
+			l.g[x] = t.cur.attr
+			l.g[x].c = ' '
 		}
 	}
 }
@@ -410,16 +433,23 @@ func (t *State) moveTo(x, y int) {
 	t.cur.y = y
 }
 
-func (t *State) swapScreen() {
+func (t *State) swapScreen(updateTime bool) {
 	t.lines, t.altLines = t.altLines, t.lines
+	t.lastLine, t.altLastLine = t.altLastLine, t.lastLine
 	t.mode ^= ModeAltScreen
-	t.dirtyAll()
+	t.dirtyAll(updateTime)
 }
 
-func (t *State) dirtyAll() {
+func (t *State) dirtyAll(updateTime bool) {
 	t.changed |= ChangedScreen
 	for y := 0; y < t.rows; y++ {
 		t.dirty[y] = true
+	}
+	if updateTime {
+		now := time.Now()
+		for y := 0; y < t.rows; y++ {
+			t.lines[y].t = now
+		}
 	}
 }
 
@@ -467,10 +497,24 @@ func (t *State) scrollDown(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, t.bottom-n+1, t.cols-1, t.bottom)
 	t.changed |= ChangedScreen
+	now := time.Now()
 	for i := t.bottom; i >= orig+n; i-- {
 		t.lines[i], t.lines[i-n] = t.lines[i-n], t.lines[i]
+		t.lines[i].t, t.lines[i-n].t = now, now
 		t.dirty[i] = true
 		t.dirty[i-n] = true
+	}
+	if t.getLastLine() >= orig {
+		// Find the new lowest line with non-space data
+	OUTER:
+		for i := t.bottom; i >= orig+n; i-- {
+			for x := 0; x < len(t.lines[i].g); x++ {
+				if t.lines[i].g[x].c != ' ' {
+					t.setLastLine(i)
+					break OUTER
+				}
+			}
+		}
 	}
 
 	// TODO: selection scroll
@@ -478,20 +522,23 @@ func (t *State) scrollDown(orig, n int) {
 
 func (t *State) scrollUp(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
+	now := time.Now()
 	if t.RecordHistory && orig == t.top {
 		for i := orig; i < orig+n; i++ {
-			l := make([]glyph, len(t.lines[i]))
-			copy(l, t.lines[i])
-			t.history = append(t.history, l)
+			l := make([]glyph, len(t.lines[i].g))
+			copy(l, t.lines[i].g)
+			t.history = append(t.history, line{t: now, g: l})
 		}
 	}
 	t.clear(0, orig, t.cols-1, orig+n-1)
 	t.changed |= ChangedScreen
 	for i := orig; i <= t.bottom-n; i++ {
 		t.lines[i], t.lines[i+n] = t.lines[i+n], t.lines[i]
+		t.lines[i].t, t.lines[i+n].t = now, now
 		t.dirty[i] = true
 		t.dirty[i+n] = true
 	}
+	// do not adjust t.lastLine
 
 	// TODO: selection scroll
 }
@@ -563,7 +610,7 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 					t.clear(0, 0, t.cols-1, t.rows-1)
 				}
 				if !set || !alt {
-					t.swapScreen()
+					t.swapScreen(true)
 				}
 				if a != 1049 {
 					break
@@ -695,7 +742,8 @@ func (t *State) insertBlanks(n int) {
 	if dst >= t.cols {
 		t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
 	} else {
-		copy(t.lines[t.cur.y][dst:dst+size], t.lines[t.cur.y][src:src+size])
+		copy(t.lines[t.cur.y].g[dst:dst+size], t.lines[t.cur.y].g[src:src+size])
+		// let t.clear set time for the line
 		t.clear(src, t.cur.y, dst-1, t.cur.y)
 	}
 }
@@ -724,7 +772,8 @@ func (t *State) deleteChars(n int) {
 	if src >= t.cols {
 		t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
 	} else {
-		copy(t.lines[t.cur.y][dst:dst+size], t.lines[t.cur.y][src:src+size])
+		copy(t.lines[t.cur.y].g[dst:dst+size], t.lines[t.cur.y].g[src:src+size])
+		// let t.clear set time for the line
 		t.clear(t.cols-n, t.cur.y, t.cols-1, t.cur.y)
 	}
 }
@@ -823,7 +872,7 @@ func (t *State) HasStringBeforeCursor(m string, ignoreNewlinesAndSpaces bool) bo
 	// first search for matching characters on the current screen
 	for ; y >= 0 && i >= 0; y-- {
 		for ; x >= 0 && i >= 0; x-- {
-			c, _, _ := t.Cell(x, y)
+			c, _, _, _ := t.Cell(x, y)
 			var isOk bool
 			isOk, i = matchRune(c, runesToMatch, i, ignoreNewlinesAndSpaces)
 			if !isOk {
@@ -835,7 +884,7 @@ func (t *State) HasStringBeforeCursor(m string, ignoreNewlinesAndSpaces bool) bo
 	// then search for matching characters in the scroll buffer (history)
 	for y = len(t.history) - 1; y >= 0 && i >= 0; y-- {
 		for x = t.cols - 1; x >= 0 && i >= 0; x-- {
-			c := t.history[y][x].c
+			c := t.history[y].g[x].c
 			var isOk bool
 			isOk, i = matchRune(c, runesToMatch, i, ignoreNewlinesAndSpaces)
 			if !isOk {
@@ -861,7 +910,7 @@ func (t *State) string(unwrap bool, toCursor bool, fromRow int, fromCol int) str
 	x := fromCol
 	for y := fromRow; y < lh; y++ {
 		for ; x < t.cols; x++ {
-			c := t.history[y][x].c
+			c := t.history[y].g[x].c
 			view = append(view, c)
 		}
 		x = 0
@@ -881,7 +930,7 @@ func (t *State) string(unwrap bool, toCursor bool, fromRow int, fromCol int) str
 			if toCursor && x == curX && y == t.cur.y {
 				break
 			}
-			c, _, _ := t.Cell(x, y)
+			c, _, _, _ := t.Cell(x, y)
 			view = append(view, c)
 		}
 		x = 0
@@ -891,4 +940,22 @@ func (t *State) string(unwrap bool, toCursor bool, fromRow int, fromCol int) str
 	}
 
 	return string(view)
+}
+
+func (t *State) getLastLine() int {
+	if t.lastLine == nil {
+		return -1
+	}
+	return *t.lastLine
+}
+
+func (t *State) setLastLine(n int) {
+	if n < 0 {
+		return
+	}
+	if t.lastLine == nil {
+		t.lastLine = &n
+		return
+	}
+	*t.lastLine = n
 }

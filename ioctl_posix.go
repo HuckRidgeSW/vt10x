@@ -1,3 +1,4 @@
+//go:build linux || darwin || dragonfly || solaris || openbsd || netbsd || freebsd
 // +build linux darwin dragonfly solaris openbsd netbsd freebsd
 
 package vt10x
@@ -8,7 +9,7 @@ import (
 	"unsafe"
 )
 
-func ioctl(f *os.File, cmd, p uintptr) error {
+func ioctl(f *os.File, _, p uintptr) error {
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		f.Fd(),

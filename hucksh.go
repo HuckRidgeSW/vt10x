@@ -8,6 +8,7 @@ package vt10x
 import (
 	"fmt"
 	"image/color"
+	"time"
 )
 
 type Glyph = glyph
@@ -23,8 +24,23 @@ const (
 	AttrWrap      = attrWrap
 )
 
-// ToRealColor converts c to image/color.Color, using a static lookup table
-// based on the iTerm "Light Background" color profile.
+// Used for 6x6x6 color palette. Similar to "web-safe" colors, but different.
+var mod6color = []uint8{
+	0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff,
+}
+
+// Used for gray-scale
+var mod24color = []uint8{
+	// 8 - 118 in steps of 10
+	0x08, 0x12, 0x1c, 0x26, 0x30, 0x3a, 0x44, 0x4e, 0x58, 0x62, 0x6c, 0x76,
+	// 128 - 238, in steps of 10
+	0x80, 0x8a, 0x94, 0x9e, 0xa8, 0xb2, 0xbc, 0xc6, 0xd0, 0xda, 0xe4, 0xee,
+}
+
+// ToRealColor converts c to image/color.Color. For the first 15, it uses a
+// static lookup table based on the iTerm "Light Background" color profile.
+// For the rest, it uses a standard map from Wikipedia
+// (https://en.wikipedia.org/wiki/ANSI_escape_code#24-bit).
 func (c Color) ToRealColor() color.Color {
 	switch c {
 	case Black, DefaultFG:
@@ -60,10 +76,22 @@ func (c Color) ToRealColor() color.Color {
 		return color.NRGBA{A: 0xff, R: 0x5f, G: 0xfd, B: 0xff}
 	case White, DefaultBG: // aka "bright white" in iTerm
 		return color.NRGBA{A: 0xff, R: 0xff, G: 0xfe, B: 0xfe}
-
-	default:
-		panic(fmt.Sprintf("Unknown color: %d", c))
 	}
+
+	if 16 <= c && c <= 231 {
+		// 16-231: 6x6x6 cube, 216 colors: 16 + 36r + 6g + b, 0 <= r, g, b <= 5
+		c -= 16
+		b := mod6color[c%6]
+		c /= 6
+		g := mod6color[c%6]
+		c /= 6
+		r := mod6color[c%6]
+		return color.NRGBA{A: 0xff, R: r, G: g, B: b}
+
+	}
+
+	gray := mod24color[(c%256)-232]
+	return color.NRGBA{A: 0xff, R: gray, G: gray, B: gray}
 }
 
 // GlobalSize returns rows and columns of state, including t.history.
@@ -86,25 +114,25 @@ func (t *State) TotalLen() int {
 
 // GlobalCell returns the given glyph, includign t.history, as separate return
 // values.
-func (t *State) GlobalCell(x, y int) (ch rune, mode int16, fg, bg Color) {
-	g := t.GlobalGlyph(x, y)
-	return g.c, g.mode, g.fg, g.bg
+func (t *State) GlobalCell(col, row int) (ch rune, mode int16, fg, bg Color, lt time.Time) {
+	g, lt := t.GlobalGlyph(col, row)
+	return g.c, g.mode, g.fg, g.bg, lt
 }
 
 // GlobalGlyph returns the given glyph, including t.history.
-func (t *State) GlobalGlyph(x, y int) glyph {
-	var g glyph
+func (t *State) GlobalGlyph(col, row int) (glyph, time.Time) {
+	var l line
 	if t.RecordHistory {
 		hl := len(t.history)
-		if y < hl {
-			g = t.history[y][x]
+		if row < hl {
+			l = t.history[row]
 		} else {
-			g = t.lines[y-hl][x]
+			l = t.lines[row-hl]
 		}
 	} else {
-		g = t.lines[y][x]
+		l = t.lines[row]
 	}
-	return g
+	return l.g[col], l.t
 }
 
 // GlobalRowDirty returns true if the given row is dirty (that is, changed
@@ -120,6 +148,14 @@ func (t *State) GlobalRowDirty(row int) bool {
 		row -= hl
 	}
 	return t.dirty[row]
+}
+
+// LastLine returns the "global" row number of the last line with non-blank
+// input. All history lines, if any, are assumed to have non-blank input. For
+// a command with no output, LastLine will return -1.
+func (t *State) LastLine() int {
+	// This is correct even if t.getLastLine() == -1
+	return len(t.history) + t.getLastLine()
 }
 
 // NewGlyph creates a new glyph from separate components.
