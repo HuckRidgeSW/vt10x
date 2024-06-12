@@ -17,7 +17,7 @@ import (
 func extractStr(t *State, x0, x1, row int) string {
 	var s []rune
 	for i := x0; i <= x1; i++ {
-		c, _, _, _ := t.Cell(i, row)
+		c, _, _, _, _ := t.Cell(i, row)
 		s = append(s, c)
 	}
 	return string(s)
@@ -71,7 +71,7 @@ func TestNewline(t *testing.T) {
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
-	_, fg, bg, _ := st.Cell(st.Cursor())
+	_, fg, bg, _, _ := st.Cell(st.Cursor())
 	if fg != DefaultFG {
 		t.Fatal(st.cur.x, st.cur.y, fg, bg)
 	}

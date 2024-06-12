@@ -70,8 +70,9 @@ type glyph struct {
 }
 
 type line struct {
-	t time.Time
-	g []glyph
+	writeT  time.Time
+	updateT time.Time
+	g       []glyph
 }
 
 type cursor struct {
@@ -143,10 +144,10 @@ func (t *State) Unlock() {
 
 // Cell returns the character code, foreground color, and background
 // color at position (x, y) relative to the top left of the terminal.
-func (t *State) Cell(x, y int) (ch rune, fg Color, bg Color, lt time.Time) {
+func (t *State) Cell(x, y int) (ch rune, fg Color, bg Color, wt, ut time.Time) {
 	l := t.lines[y]
 	g := l.g[x]
-	return g.c, Color(g.fg), Color(g.bg), l.t
+	return g.c, Color(g.fg), Color(g.bg), l.writeT, l.updateT
 }
 
 // Cursor returns the current position of the cursor.
@@ -290,7 +291,7 @@ func (t *State) setChar(c rune, attr *glyph, x, y int) {
 		g.bg = attr.fg
 	}
 	if *g != orig {
-		l.t = time.Now()
+		l.updateTimes(time.Now())
 	}
 }
 
@@ -345,14 +346,16 @@ func (t *State) resize(cols, rows int) bool {
 	now := time.Now()
 	for i := 0; i < rows; i++ {
 		t.dirty[i] = true
-		t.lines[i] = line{t: now, g: make([]glyph, cols)}
-		t.altLines[i] = line{t: now, g: make([]glyph, cols)}
+		t.lines[i] = line{writeT: now, updateT: now, g: make([]glyph, cols)}
+		t.altLines[i] = line{writeT: now, updateT: now, g: make([]glyph, cols)}
 	}
 	for i := 0; i < minrows; i++ {
 		copy(t.lines[i].g, lines[i].g)
 		copy(t.altLines[i].g, altLines[i].g)
-		t.lines[i].t = lines[i].t
-		t.altLines[i].t = altLines[i].t
+		t.lines[i].writeT = lines[i].writeT
+		t.lines[i].updateT = now
+		t.altLines[i].writeT = altLines[i].writeT
+		t.altLines[i].updateT = now
 	}
 	copy(t.tabs, tabs)
 	if cols >= t.cols {
@@ -397,7 +400,7 @@ func (t *State) clear(x0, y0, x1, y1 int) {
 	for y := y0; y <= y1; y++ {
 		t.dirty[y] = true
 		l := &t.lines[y]
-		l.t = now
+		l.updateTimes(now)
 		for x := x0; x <= x1; x++ {
 			l.g[x] = t.cur.attr
 			l.g[x].c = ' '
@@ -448,7 +451,7 @@ func (t *State) dirtyAll(updateTime bool) {
 	if updateTime {
 		now := time.Now()
 		for y := 0; y < t.rows; y++ {
-			t.lines[y].t = now
+			t.lines[y].updateTimes(now)
 		}
 	}
 }
@@ -500,7 +503,7 @@ func (t *State) scrollDown(orig, n int) {
 	now := time.Now()
 	for i := t.bottom; i >= orig+n; i-- {
 		t.lines[i], t.lines[i-n] = t.lines[i-n], t.lines[i]
-		t.lines[i].t, t.lines[i-n].t = now, now
+		t.lines[i].updateT, t.lines[i-n].updateT = now, now
 		t.dirty[i] = true
 		t.dirty[i-n] = true
 	}
@@ -527,14 +530,14 @@ func (t *State) scrollUp(orig, n int) {
 		for i := orig; i < orig+n; i++ {
 			l := make([]glyph, len(t.lines[i].g))
 			copy(l, t.lines[i].g)
-			t.history = append(t.history, line{t: now, g: l})
+			t.history = append(t.history, line{writeT: t.lines[i].writeT, updateT: now, g: l})
 		}
 	}
 	t.clear(0, orig, t.cols-1, orig+n-1)
 	t.changed |= ChangedScreen
 	for i := orig; i <= t.bottom-n; i++ {
 		t.lines[i], t.lines[i+n] = t.lines[i+n], t.lines[i]
-		t.lines[i].t, t.lines[i+n].t = now, now
+		t.lines[i].updateT, t.lines[i+n].updateT = now, now
 		t.dirty[i] = true
 		t.dirty[i+n] = true
 	}
@@ -872,7 +875,7 @@ func (t *State) HasStringBeforeCursor(m string, ignoreNewlinesAndSpaces bool) bo
 	// first search for matching characters on the current screen
 	for ; y >= 0 && i >= 0; y-- {
 		for ; x >= 0 && i >= 0; x-- {
-			c, _, _, _ := t.Cell(x, y)
+			c, _, _, _, _ := t.Cell(x, y)
 			var isOk bool
 			isOk, i = matchRune(c, runesToMatch, i, ignoreNewlinesAndSpaces)
 			if !isOk {
@@ -930,7 +933,7 @@ func (t *State) string(unwrap bool, toCursor bool, fromRow int, fromCol int) str
 			if toCursor && x == curX && y == t.cur.y {
 				break
 			}
-			c, _, _, _ := t.Cell(x, y)
+			c, _, _, _, _ := t.Cell(x, y)
 			view = append(view, c)
 		}
 		x = 0
@@ -958,4 +961,8 @@ func (t *State) setLastLine(n int) {
 		return
 	}
 	*t.lastLine = n
+}
+
+func (l *line) updateTimes(t time.Time) {
+	l.writeT, l.updateT = t, t
 }

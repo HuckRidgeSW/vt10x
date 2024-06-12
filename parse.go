@@ -17,8 +17,9 @@ func (t *State) parse(c rune) bool {
 	// TODO: update selection; see st.c:2450
 
 	if t.mode&ModeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
-		t.lines[t.cur.y].g[t.cur.x].mode |= attrWrap
-		t.lines[t.cur.y].t = time.Now()
+		l := &t.lines[t.cur.y]
+		l.g[t.cur.x].mode |= attrWrap
+		l.updateTimes(time.Now())
 		t.newline(true)
 	}
 

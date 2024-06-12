@@ -114,13 +114,13 @@ func (t *State) TotalLen() int {
 
 // GlobalCell returns the given glyph, includign t.history, as separate return
 // values.
-func (t *State) GlobalCell(col, row int) (ch rune, mode int16, fg, bg Color, lt time.Time) {
-	g, lt := t.GlobalGlyph(col, row)
-	return g.c, g.mode, g.fg, g.bg, lt
+func (t *State) GlobalCell(col, row int) (ch rune, mode int16, fg, bg Color, wt, ut time.Time) {
+	g, wt, ut := t.GlobalGlyph(col, row)
+	return g.c, g.mode, g.fg, g.bg, wt, ut
 }
 
 // GlobalGlyph returns the given glyph, including t.history.
-func (t *State) GlobalGlyph(col, row int) (glyph, time.Time) {
+func (t *State) GlobalGlyph(col, row int) (_ glyph, wt, ut time.Time) {
 	var l line
 	if t.RecordHistory {
 		hl := len(t.history)
@@ -132,7 +132,7 @@ func (t *State) GlobalGlyph(col, row int) (glyph, time.Time) {
 	} else {
 		l = t.lines[row]
 	}
-	return l.g[col], l.t
+	return l.g[col], l.writeT, l.updateT
 }
 
 // GlobalRowDirty returns true if the given row is dirty (that is, changed
