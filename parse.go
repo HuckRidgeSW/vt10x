@@ -19,7 +19,6 @@ func (t *State) parse(c rune) bool {
 	if t.mode&ModeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
 		l := &t.lines[t.cur.y]
 		l.g[t.cur.x].mode |= attrWrap
-		l.updateTimes(time.Now())
 		t.newline(true)
 	}
 
@@ -199,6 +198,7 @@ func (t *State) handleControlCodes(c rune) (bool, bool) {
 		t.moveTo(0, t.cur.y)
 	// LF, VT, LF
 	case '\f', '\v', '\n':
+		t.lines[t.cur.y].updateTimes(time.Now())
 		// go to first col if mode is set
 		t.newline(t.mode&ModeCRLF != 0)
 		isPrintable = true
