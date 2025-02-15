@@ -44,12 +44,12 @@ func goterm() error {
 	if err != nil {
 		return err
 	}
-	defer s.Fini()
 
 	err = s.Init()
 	if err != nil {
 		return err
 	}
+	defer s.Fini()
 
 	width, height := s.Size()
 	vt10x.ResizePty(ptm, width, height)

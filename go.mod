@@ -1,8 +1,10 @@
 module github.com/ActiveState/vt10x
 
-go 1.21.6
+go 1.24.0
 
 replace github.com/ActiveState/vt10x => ./
+
+replace github.com/kr/pty => github.com/creack/pty v1.1.24
 
 require (
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
